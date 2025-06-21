@@ -3,7 +3,6 @@ const path = require('path');
 
 const AUTH_FILE = path.join(__dirname, '..', 'authorized.json');
 
-// Load auth data
 function loadAuth() {
   if (!fs.existsSync(AUTH_FILE)) {
     fs.writeFileSync(AUTH_FILE, JSON.stringify({ users: [], groups: [] }, null, 2));
@@ -11,45 +10,31 @@ function loadAuth() {
   return JSON.parse(fs.readFileSync(AUTH_FILE));
 }
 
-// Save auth data
-function saveAuth(data) {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(data, null, 2));
+function saveAuth(auth) {
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2));
 }
 
 module.exports = {
   name: 'reg',
-  description: 'Register user or group JID to authorize bot usage',
-  
+  description: 'Register user or group to use the bot',
   async execute(sock, from, args) {
-    if (!args[0]) {
-      await sock.sendMessage(from, { text: '❌ Usage: .reg <jid>\nExample: .reg 123456789@s.whatsapp.net or .reg 123456789-123456@g.us' });
-      return;
-    }
+    const auth = loadAuth();
 
-    const jid = args[0];
-    if (!jid.includes('@')) {
-      await sock.sendMessage(from, { text: '❌ Invalid JID format. Must include @.' });
-      return;
-    }
-
-    const authData = loadAuth();
-    const isGroup = jid.endsWith('@g.us');
-
-    if (isGroup) {
-      if (authData.groups.includes(jid)) {
-        await sock.sendMessage(from, { text: `✅ Group ${jid} is already registered.` });
+    if (from.endsWith('@g.us')) {
+      if (!auth.groups.includes(from)) {
+        auth.groups.push(from);
+        saveAuth(auth);
+        await sock.sendMessage(from, { text: '✅ Group registered successfully!' });
       } else {
-        authData.groups.push(jid);
-        saveAuth(authData);
-        await sock.sendMessage(from, { text: `✅ Group ${jid} registered successfully.` });
+        await sock.sendMessage(from, { text: '⚠️ Group is already registered.' });
       }
     } else {
-      if (authData.users.includes(jid)) {
-        await sock.sendMessage(from, { text: `✅ User ${jid} is already registered.` });
+      if (!auth.users.includes(from)) {
+        auth.users.push(from);
+        saveAuth(auth);
+        await sock.sendMessage(from, { text: '✅ User registered successfully!' });
       } else {
-        authData.users.push(jid);
-        saveAuth(authData);
-        await sock.sendMessage(from, { text: `✅ User ${jid} registered successfully.` });
+        await sock.sendMessage(from, { text: '⚠️ You are already registered.' });
       }
     }
   }
