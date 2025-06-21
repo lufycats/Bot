@@ -1,65 +1,108 @@
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
+
+const P = require('pino');
+const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
-const AUTH_FILE = path.join(__dirname, 'authorized.json');
 
-// Load or create auth data
-let authData = { users: [], groups: [] };
-if (fs.existsSync(AUTH_FILE)) {
-  authData = JSON.parse(fs.readFileSync(AUTH_FILE));
-} else {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(authData, null, 2));
-}
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const { version } = await fetchLatestBaileysVersion();
 
-async function saveAuthData() {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(authData, null, 2));
-}
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: true,
+    logger: P({ level: 'silent' }),
 
-// Helper to check if jid is authorized
-function isAuthorized(jid) {
-  if (jid.endsWith('@g.us')) {
-    // Group JID
-    return authData.groups.includes(jid);
-  } else {
-    // User JID
-    return authData.users.includes(jid);
-  }
-}
+    // Stealth mode: no online, no typing
+    shouldSendPresence: false,
+    markOnlineOnConnect: false,
+  });
 
-sock.ev.on('messages.upsert', async ({ messages }) => {
-  const m = messages[0];
-  if (!m.message || m.key.fromMe) return;
+  // Override presence updates to block online/typing presence
+  const realSendPresenceUpdate = sock.sendPresenceUpdate;
+  sock.sendPresenceUpdate = async (type, toJid) => {
+    if (['available', 'composing', 'recording', 'paused'].includes(type)) {
+      return; // block these presence updates
+    }
+    return realSendPresenceUpdate(type, toJid);
+  };
 
-  const from = m.key.remoteJid;
-  const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
-
-  // .reg command (only allowed from owner or bot admin)
-  if (msg.startsWith('.reg ')) {
-    const jidToAdd = msg.slice(5).trim();
-    if (jidToAdd.endsWith('@g.us')) {
-      if (!authData.groups.includes(jidToAdd)) {
-        authData.groups.push(jidToAdd);
-        await sock.sendMessage(from, { text: `✅ Group registered: ${jidToAdd}` });
-      } else {
-        await sock.sendMessage(from, { text: `⚠️ Group already registered.` });
+  // Load plugins
+  const plugins = new Map();
+  const pluginsPath = path.join(__dirname, 'plugins');
+  if (fs.existsSync(pluginsPath)) {
+    fs.readdirSync(pluginsPath).forEach(file => {
+      if (file.endsWith('.js')) {
+        const plugin = require(path.join(pluginsPath, file));
+        if (plugin.name && typeof plugin.execute === 'function') {
+          plugins.set(plugin.name, plugin);
+          console.log(`✅ Loaded plugin: ${plugin.name}`);
+        }
       }
-    } else {
-      // Assuming user jid format is full (like 947xxxxxxxx@s.whatsapp.net)
-      if (!authData.users.includes(jidToAdd)) {
-        authData.users.push(jidToAdd);
-        await sock.sendMessage(from, { text: `✅ User registered: ${jidToAdd}` });
+    });
+  }
+
+  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    if (connection === 'open') {
+      console.log('✅ Connected in invisible mode');
+      sock.sendPresenceUpdate('unavailable');
+    } else if (connection === 'close') {
+      const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      if (reason === DisconnectReason.loggedOut) {
+        console.log('❌ Logged out. Please scan QR again.');
       } else {
-        await sock.sendMessage(from, { text: `⚠️ User already registered.` });
+        console.log('🔁 Reconnecting...');
+        startBot();
       }
     }
-    await saveAuthData();
-    return;
-  }
+  });
 
-  // Check authorization before processing other commands
-  if (!isAuthorized(from)) {
-    await sock.sendMessage(from, { text: '❌ You are not authorized to use this bot. Please register first.' });
-    return;
-  }
+  sock.ev.on('creds.update', saveCreds);
 
-  // Continue with your existing command handling here...
-});
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    const m = messages[0];
+    if (!m.message || m.key.fromMe) return;
+
+    const from = m.key.remoteJid;
+    const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
+
+    if (!msg.startsWith('!')) return; // ignore non-command messages
+
+    const [command, ...args] = msg.slice(1).trim().split(/\s+/);
+
+    if (command === 'ping') {
+      const start = Date.now();
+      await sock.sendMessage(from, { text: 'pong!' });
+      await sock.sendPresenceUpdate('unavailable');
+      const end = Date.now();
+      const ping = end - start;
+      await sock.sendMessage(from, { text: `pong! ${ping} ms` });
+      await sock.sendPresenceUpdate('unavailable');
+      return;
+    }
+
+    if (plugins.has(command)) {
+      try {
+        await plugins.get(command).execute(sock, from, args);
+        await sock.sendPresenceUpdate('unavailable');
+      } catch (err) {
+        console.error(`Error running plugin ${command}:`, err);
+        await sock.sendMessage(from, { text: `⚠️ Error executing command: ${command}` });
+      }
+    }
+  });
+
+  // Silence some events that cause presence/read receipts
+  sock.ev.on('messages.update', () => {});
+  sock.ev.on('message-receipt.update', () => {});
+  sock.ev.on('presence.update', () => {});
+}
+
+startBot();
