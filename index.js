@@ -10,6 +10,24 @@ const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
 
+const AUTH_FILE = path.join(__dirname, 'authorized.json');
+
+function loadAuth() {
+  if (!fs.existsSync(AUTH_FILE)) {
+    fs.writeFileSync(AUTH_FILE, JSON.stringify({ users: [], groups: [] }, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(AUTH_FILE));
+}
+
+function isAuthorized(jid) {
+  const authData = loadAuth();
+  if (jid.endsWith('@g.us')) {
+    return authData.groups.includes(jid);
+  } else {
+    return authData.users.includes(jid);
+  }
+}
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   const { version } = await fetchLatestBaileysVersion();
@@ -17,7 +35,7 @@ async function startBot() {
   const sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true,
+    printQRInTerminal: true, // set to false if deployed in Railway and you have saved auth_info
     logger: P({ level: 'silent' }),
 
     // Stealth mode: no online, no typing
@@ -73,7 +91,13 @@ async function startBot() {
     const from = m.key.remoteJid;
     const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
 
-    if (!msg.startsWith('!')) return; // ignore non-command messages
+    if (!msg.startsWith('!')) return; // only process commands starting with '!'
+
+    // --- AUTHORIZATION CHECK ---
+    if (!isAuthorized(from)) {
+      // silently ignore unauthorized users/groups
+      return;
+    }
 
     const [command, ...args] = msg.slice(1).trim().split(/\s+/);
 
