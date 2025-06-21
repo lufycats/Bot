@@ -1,3 +1,10 @@
+const fs = require('fs');
+
+// Auto-create temp/ folder if it doesn't exist
+if (!fs.existsSync('./temp')) {
+  fs.mkdirSync('./temp');
+  console.log('📁 Created temp/ folder');
+}
 const {
   default: makeWASocket,
   useMultiFileAuthState,
