@@ -2,17 +2,14 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore
+  fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-
 const P = require('pino');
 const { Boom } = require('@hapi/boom');
-const fs = require('fs');
 
 async function startBot() {
-  const { version } = await fetchLatestBaileysVersion();
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
@@ -20,29 +17,21 @@ async function startBot() {
     printQRInTerminal: true,
     logger: P({ level: 'silent' }),
 
-    // 👇 Stealth mode settings
+    // 👇 FULL stealth settings
     shouldSendPresence: false,
-    markOnlineOnConnect: false,
-    generateHighQualityLinkPreview: false,
-    syncFullHistory: false,
-    getMessage: async () => ({ conversation: "❌ Blocked read" })
+    markOnlineOnConnect: false
   });
 
-  // 🔄 Auto reconnect
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
-
+  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
-      console.log('✅ Connected to WhatsApp (invisible mode)');
-      sock.sendPresenceUpdate('unavailable'); // Appear offline
-    }
-
-    if (connection === 'close') {
+      console.log('✅ Connected to WhatsApp (always offline)');
+      sock.sendPresenceUpdate('unavailable'); // Stay offline after connect
+    } else if (connection === 'close') {
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (reason === DisconnectReason.loggedOut) {
-        console.log('❌ Logged out. Scan QR again.');
+        console.log('❌ Logged out. Please re-scan QR.');
       } else {
-        console.log('🔄 Reconnecting...');
+        console.log('🔁 Reconnecting...');
         startBot();
       }
     }
@@ -50,7 +39,6 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // 📥 Message handler
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const m = messages[0];
     if (!m.message || m.key.fromMe) return;
@@ -58,19 +46,24 @@ async function startBot() {
     const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
     const from = m.key.remoteJid;
 
-    // ❌ Prevent double tick: don't send delivery receipt
-    // ❌ Prevent blue tick: don't send read receipt
-
-    // ✅ Respond without triggering "typing"
     if (msg.toLowerCase() === '!ping') {
-      await sock.sendMessage(from, { text: 'pong!' });
+      try {
+        // Send message silently
+        await sock.sendMessage(from, { text: 'pong!' });
+
+        // Immediately set status offline again
+        await sock.sendPresenceUpdate('unavailable');
+      } catch (err) {
+        console.log('⚠️ Error sending message:', err);
+      }
     }
   });
 
-  // ⛔ BLOCK TICKS — override events
-  sock.ev.on('messages.update', async () => {});
+  // Prevent auto-acknowledgement + hide presence activity
   sock.ev.on('message-receipt.update', async () => {});
-  sock.ev.on('messages.reaction', async () => {});
+  sock.ev.on('messages.update', async () => {});
+  sock.ev.on('presence.update', async () => {});
+  sock.ev.on('chats.update', async () => {});
 }
 
 startBot();
