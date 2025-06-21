@@ -1,6 +1,7 @@
 {
   "name": "whatsapp-bot",
   "version": "1.0.0",
+  "description": "Multi-device WhatsApp bot using Baileys",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,9 +10,12 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-  "@whiskeysockets/baileys": "^6.7.18",
-  "@hapi/boom": "^10.0.1",
-  "qrcode-terminal": "^0.12.0"
-  
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.6.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "pino": "^8.14.1",
+    "ytdl-core": "^4.11.4",
+    "ytsr": "^3.10.1"
   }
 }
