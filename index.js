@@ -17,19 +17,29 @@ async function startBot() {
     printQRInTerminal: true,
     logger: P({ level: 'silent' }),
 
-    // 👇 FULL stealth settings
+    // 🕶 Full stealth mode
     shouldSendPresence: false,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: false,
+    getMessage: async () => ({ conversation: "ignored" }),
   });
+
+  // 🧠 Override presence sending to block typing/online
+  const realSendPresenceUpdate = sock.sendPresenceUpdate;
+  sock.sendPresenceUpdate = async (type, toJid) => {
+    if (type === 'available' || type === 'composing' || type === 'recording' || type === 'paused') {
+      return; // ❌ block these
+    }
+    return realSendPresenceUpdate(type, toJid); // ✅ allow only 'unavailable'
+  };
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
-      console.log('✅ Connected to WhatsApp (always offline)');
-      sock.sendPresenceUpdate('unavailable'); // Stay offline after connect
+      console.log('✅ Connected in invisible mode');
+      sock.sendPresenceUpdate('unavailable'); // stay invisible always
     } else if (connection === 'close') {
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (reason === DisconnectReason.loggedOut) {
-        console.log('❌ Logged out. Please re-scan QR.');
+        console.log('❌ Logged out. Please scan again.');
       } else {
         console.log('🔁 Reconnecting...');
         startBot();
@@ -43,27 +53,29 @@ async function startBot() {
     const m = messages[0];
     if (!m.message || m.key.fromMe) return;
 
-    const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
     const from = m.key.remoteJid;
+    const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
 
     if (msg.toLowerCase() === '!ping') {
-      try {
-        // Send message silently
-        await sock.sendMessage(from, { text: 'pong!' });
+      const start = Date.now();
 
-        // Immediately set status offline again
-        await sock.sendPresenceUpdate('unavailable');
-      } catch (err) {
-        console.log('⚠️ Error sending message:', err);
-      }
+      // 🔕 Reply without presence
+      await sock.sendMessage(from, { text: 'pong!' });
+      await sock.sendPresenceUpdate('unavailable'); // force offline
+
+      const end = Date.now();
+      const ping = end - start;
+
+      // Send actual ping result
+      await sock.sendMessage(from, { text: `pong! ${ping} ms` });
+      await sock.sendPresenceUpdate('unavailable'); // stay offline
     }
   });
 
-  // Prevent auto-acknowledgement + hide presence activity
-  sock.ev.on('message-receipt.update', async () => {});
-  sock.ev.on('messages.update', async () => {});
-  sock.ev.on('presence.update', async () => {});
-  sock.ev.on('chats.update', async () => {});
+  // 🚫 Block ticks + reactions
+  sock.ev.on('messages.update', () => {});
+  sock.ev.on('message-receipt.update', () => {});
+  sock.ev.on('presence.update', () => {});
 }
 
 startBot();
