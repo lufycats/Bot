@@ -21,7 +21,9 @@ function loadAuth() {
 
 function isAuthorized(jid) {
   const auth = loadAuth();
-  return jid.endsWith('@g.us') ? auth.groups.includes(jid) : auth.users.includes(jid);
+  return jid.endsWith('@g.us')
+    ? auth.groups.includes(jid)
+    : auth.users.includes(jid);
 }
 
 async function startBot() {
@@ -38,16 +40,12 @@ async function startBot() {
     getMessage: async () => ({})
   });
 
-  // Force "offline" mode — block all presence except 'unavailable'
-  const realSendPresenceUpdate = sock.sendPresenceUpdate;
+  // Make bot invisible always
   sock.sendPresenceUpdate = async (type, toJid) => {
     if (type === 'unavailable') {
-      return await realSendPresenceUpdate(type, toJid);
+      return await sock.presenceSubscribe(toJid);
     }
   };
-
-  // Print bot’s own JID for setup
-  console.log('🤖 Bot JID:', sock.user?.id);
 
   // Load plugins
   const plugins = new Map();
@@ -83,22 +81,27 @@ async function startBot() {
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const m = messages[0];
-    if (!m.message) return; // ✅ allow bot to respond to self
+    if (!m.message) return;
 
     const from = m.key.remoteJid;
-    const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
-    if (!msg.startsWith('!')) return;
+    const msg =
+      m.message.conversation ||
+      m.message.extendedTextMessage?.text ||
+      m.message.imageMessage?.caption ||
+      '';
+
+    if (!msg.startsWith('!') && !msg.startsWith('.')) return;
 
     const [command, ...args] = msg.slice(1).trim().split(/\s+/);
 
-    // Allow .reg for anyone
+    // Always allow .reg
     if (command === 'reg' && plugins.has('reg')) {
       await plugins.get('reg').execute(sock, from, args);
       await sock.sendPresenceUpdate('unavailable').catch(() => {});
       return;
     }
 
-    // Check if user/group is authorized
+    // If not authorized, ignore silently
     if (!isAuthorized(from)) return;
 
     // Built-in command: ping
@@ -111,19 +114,18 @@ async function startBot() {
       return;
     }
 
-    // Other plugin commands
+    // Plugin commands
     if (plugins.has(command)) {
       try {
         await plugins.get(command).execute(sock, from, args);
         await sock.sendPresenceUpdate('unavailable').catch(() => {});
       } catch (err) {
         console.error(`❌ Error in plugin ${command}:`, err);
-        await sock.sendMessage(from, { text: '⚠️ Error executing command.' });
+        await sock.sendMessage(from, { text: '⚠️ Command failed.' });
       }
     }
   });
 
-  // Suppress read/receipt/presence events
   sock.ev.on('messages.update', () => {});
   sock.ev.on('presence.update', () => {});
   sock.ev.on('message-receipt.update', () => {});
