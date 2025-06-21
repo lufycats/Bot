@@ -16,6 +16,9 @@
     "fluent-ffmpeg": "^2.1.2",
     "pino": "^8.14.1",
     "ytdl-core": "^4.11.4",
-    "ytsr": "^3.6.6"
+    "ytsr": "3.6.6"
+  },
+  "resolutions": {
+    "ytsr": "3.6.6"
   }
 }
