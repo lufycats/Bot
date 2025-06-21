@@ -1,10 +1,3 @@
-const fs = require('fs');
-
-// Auto-create temp/ folder if it doesn't exist
-if (!fs.existsSync('./temp')) {
-  fs.mkdirSync('./temp');
-  console.log('📁 Created temp/ folder');
-}
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -13,11 +6,17 @@ const {
 } = require('@whiskeysockets/baileys');
 
 const P = require('pino');
+const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
-const { Boom } = require('@hapi/boom');
 
-// === AUTHORIZATION LOGIC ===
+// === CREATE TEMP FOLDER ===
+if (!fs.existsSync('./temp')) {
+  fs.mkdirSync('./temp');
+  console.log('📁 Created temp/ folder');
+}
+
+// === AUTHORIZED USERS ===
 const AUTH_FILE = path.join(__dirname, 'authorized.json');
 
 function loadAuth() {
@@ -52,14 +51,14 @@ async function startBot() {
     markOnlineOnConnect: false
   });
 
-  // Block online/typing
+  // Block presence like online, typing, recording
   const realSendPresenceUpdate = sock.sendPresenceUpdate;
   sock.sendPresenceUpdate = async (type, toJid) => {
     if (['available', 'composing', 'recording', 'paused'].includes(type)) return;
     return realSendPresenceUpdate(type, toJid);
   };
 
-  // === LOAD PLUGINS ===
+  // === PLUGINS ===
   const plugins = new Map();
   const pluginsPath = path.join(__dirname, 'plugins');
   if (fs.existsSync(pluginsPath)) {
@@ -77,12 +76,12 @@ async function startBot() {
   // === CONNECTION EVENTS ===
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
-      console.log('✅ Connected (Stealth Mode)');
+      console.log('✅ Connected (invisible)');
       sock.sendPresenceUpdate('unavailable');
     } else if (connection === 'close') {
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (reason === DisconnectReason.loggedOut) {
-        console.log('❌ Logged out. Please re-scan QR.');
+        console.log('❌ Logged out. Please scan QR again.');
       } else {
         console.log('🔁 Reconnecting...');
         setTimeout(startBot, 3000);
@@ -109,21 +108,21 @@ async function startBot() {
     const selfJid = sock.user?.id;
     const isSelf = from === selfJid;
 
-    // Always allow bot to run commands to itself
+    // Always allow the bot to command itself
     if (!isSelf && !isAuthorized(from)) {
-      console.log(`❌ Unauthorized: ${from}`);
+      console.log(`❌ Blocked unauthorized: ${from}`);
       await sock.sendPresenceUpdate('unavailable');
       return;
     }
 
-    // Always allow .reg command
+    // Always allow .reg
     if (command === 'reg' && plugins.has('reg')) {
       await plugins.get('reg').execute(sock, from, args);
       await sock.sendPresenceUpdate('unavailable');
       return;
     }
 
-    // Run plugins
+    // Plugin execution
     if (plugins.has(command)) {
       try {
         await plugins.get(command).execute(sock, from, args);
@@ -136,7 +135,7 @@ async function startBot() {
     }
   });
 
-  // Silence presence and read events
+  // === SILENT EVENTS ===
   sock.ev.on('messages.update', () => {});
   sock.ev.on('message-receipt.update', () => {});
   sock.ev.on('presence.update', () => {});
