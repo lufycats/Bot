@@ -54,20 +54,19 @@ async function startBot() {
     auth: state,
     printQRInTerminal: true,
     logger: P({ level: 'silent' }),
-
-    // 👻 Stealth Mode
     shouldSendPresence: false,
     markOnlineOnConnect: false,
   });
 
-  // 👻 Force presence offline always
+  // 👻 Stealth Mode (force offline presence always)
   const realSendPresenceUpdate = sock.sendPresenceUpdate;
   sock.sendPresenceUpdate = async (type, toJid) => {
-    if (['available', 'composing', 'recording', 'paused'].includes(type)) {
-      return;
-    }
+    if (['available', 'composing', 'recording', 'paused'].includes(type)) return;
     return realSendPresenceUpdate(type, toJid);
   };
+  setInterval(() => {
+    sock.sendPresenceUpdate('unavailable');
+  }, 15000);
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
@@ -92,13 +91,12 @@ async function startBot() {
 
     const from = m.key.remoteJid;
     const msg = m.message.conversation || m.message.extendedTextMessage?.text || '';
-
     if (!msg.startsWith('.') && !msg.startsWith('!')) return;
 
     const [rawCommand, ...args] = msg.slice(1).trim().split(/\s+/);
     const command = rawCommand.toLowerCase();
 
-    // === 🔐 Handle Registration ===
+    // === 🔐 Registration
     if (command === 'reg' && args[0]) {
       const jidToAdd = args[0].includes('@') ? args[0] : args[0] + '@s.whatsapp.net';
       if (jidToAdd.endsWith('@g.us')) {
@@ -106,30 +104,21 @@ async function startBot() {
           authData.groups.push(jidToAdd);
           saveAuthData();
           await sock.sendMessage(from, { text: `✅ Registered group: ${jidToAdd}` });
-        } else {
-          await sock.sendMessage(from, { text: `⚠️ Group already registered.` });
         }
       } else {
         if (!authData.users.includes(jidToAdd)) {
           authData.users.push(jidToAdd);
           saveAuthData();
           await sock.sendMessage(from, { text: `✅ Registered user: ${jidToAdd}` });
-        } else {
-          await sock.sendMessage(from, { text: `⚠️ User already registered.` });
         }
       }
       return;
     }
 
-    // 🛑 Block if not registered
-    if (!isAuthorized(from)) {
-      await sock.sendMessage(from, {
-        text: '❌ You are not authorized to use this bot. Ask owner to `.reg <jid>` first.',
-      });
-      return;
-    }
+    // === 🛑 Authorization check
+    if (!isAuthorized(from)) return;
 
-    // === 💓 Ping command ===
+    // === 💓 Ping command
     if (command === 'ping') {
       const start = Date.now();
       await sock.sendMessage(from, { text: 'pong!' });
@@ -140,23 +129,17 @@ async function startBot() {
       return;
     }
 
-    // === 🧩 Handle Plugin Command ===
+    // === 🧩 Plugin commands
     if (plugins.has(command)) {
       try {
-        await plugins.get(command).execute(sock, from, args);
+        await plugins.get(command).execute(sock, m, args);
         await sock.sendPresenceUpdate('unavailable');
       } catch (err) {
         console.error(`⚠️ Error in plugin ${command}:`, err);
-        await sock.sendMessage(from, { text: `⚠️ Error executing ${command}.` });
       }
-      return;
     }
-
-    // Unknown command
-    await sock.sendMessage(from, { text: `❓ Unknown command: ${command}` });
   });
 
-  // 🚫 Silence read/typing ticks
   sock.ev.on('messages.update', () => {});
   sock.ev.on('message-receipt.update', () => {});
   sock.ev.on('presence.update', () => {});
